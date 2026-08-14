@@ -1,0 +1,70 @@
+name: canopus-signal-tracker
+
+on:
+  schedule:
+    # Uniquement lun-ven, 06:55-21:00 UTC (couvre 02:55-16:00 NY hiver ET ete avec marge) --
+    # reduit environ de moitie le nombre de declenchements vs 24h/24, important pour le
+    # quota gratuit GitHub Actions si le repo est prive (voir README)
+    - cron: "*/5 6-21 * * 1-5"
+  workflow_dispatch: {}
+
+concurrency:
+  group: canopus-tracker
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Garde horaire (NY, jours ouvres, fenetre 02:55-16:00) -- AVANT pip install
+        id: guard
+        run: |
+          python - <<'EOF'
+          import sys
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+          now_ny = datetime.now(ZoneInfo("America/New_York"))
+          is_weekday = now_ny.weekday() < 5  # lun=0 .. ven=4
+          in_window = (2, 55) <= (now_ny.hour, now_ny.minute) <= (16, 0)
+          proceed = is_weekday and in_window
+          print(f"NY time: {now_ny}  weekday_ok={is_weekday}  window_ok={in_window}  -> proceed={proceed}")
+          with open("$GITHUB_OUTPUT", "a") as f:
+              f.write(f"proceed={'true' if proceed else 'false'}\n")
+          EOF
+
+      - name: Installer les dependances
+        if: steps.guard.outputs.proceed == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Executer le pipeline Canopus
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python scripts/run.py
+
+      - name: Commit + push de l'etat (avec retry si collision)
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          git config user.name "canopus-bot"
+          git config user.email "canopus-bot@users.noreply.github.com"
+          git add state/state.json
+          if git diff --cached --quiet; then
+            echo "Rien a committer."
+            exit 0
+          fi
+          for i in 1 2 3 4 5; do
+            git commit -m "update state $(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
+            git pull --rebase && git push && break || {
+              echo "Collision, retry $i..."; sleep $((RANDOM % 5 + 2));
+              git pull --rebase;
+            }
+          done
