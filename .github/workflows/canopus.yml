@@ -27,11 +27,11 @@ jobs:
       - name: Installer les dependances
         run: pip install -r requirements.txt
 
-      - name: Garde horaire (NY, jours ouvres, fenetre 02:55-16:00)
+      - name: Garde horaire (NY, jours ouvres, fenetre 02:55-16:00) -- AVANT pip install
         id: guard
         run: |
-          python - <<'EOF'
-          import sys
+          python3 - <<'EOF'
+          import os
           from datetime import datetime
           from zoneinfo import ZoneInfo
           now_ny = datetime.now(ZoneInfo("America/New_York"))
@@ -39,7 +39,7 @@ jobs:
           in_window = (2, 55) <= (now_ny.hour, now_ny.minute) <= (16, 0)
           proceed = is_weekday and in_window
           print(f"NY time: {now_ny}  weekday_ok={is_weekday}  window_ok={in_window}  -> proceed={proceed}")
-          with open("$GITHUB_OUTPUT", "a") as f:
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"proceed={'true' if proceed else 'false'}\n")
           EOF
 
