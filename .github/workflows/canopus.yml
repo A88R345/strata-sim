@@ -2,10 +2,9 @@ name: canopus-signal-tracker
 
 on:
   schedule:
-    # Uniquement lun-ven, 06:55-21:00 UTC (couvre 02:55-16:00 NY hiver ET ete avec marge) --
-    # reduit environ de moitie le nombre de declenchements vs 24h/24, important pour le
-    # quota gratuit GitHub Actions si le repo est prive (voir README)
-    - cron: "*/5 6-21 * * 1-5"
+    # Toutes les 5 min, 24h/24 en UTC -- la garde Python filtre heures de marche + jours ouvres
+    # (cron ne gere pas le fuseau NY ni les jours feries US -- filtrage fait cote script)
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 concurrency:
@@ -25,7 +24,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Garde horaire (NY, jours ouvres, fenetre 02:55-16:00) -- AVANT pip install
+      - name: Installer les dependances
+        run: pip install -r requirements.txt
+
+      - name: Garde horaire (NY, jours ouvres, fenetre 02:55-16:00)
         id: guard
         run: |
           python - <<'EOF'
@@ -40,10 +42,6 @@ jobs:
           with open("$GITHUB_OUTPUT", "a") as f:
               f.write(f"proceed={'true' if proceed else 'false'}\n")
           EOF
-
-      - name: Installer les dependances
-        if: steps.guard.outputs.proceed == 'true'
-        run: pip install -r requirements.txt
 
       - name: Executer le pipeline Canopus
         if: steps.guard.outputs.proceed == 'true'
