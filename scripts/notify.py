@@ -63,13 +63,10 @@ def notify_payout(amount, state):
     _post(msg)
 
 
-def notify_eod_summary(day_pnl, state, n_days_this_combine):
+def notify_eod_summary(day_pnl, state, n_days_this_combine, late=False):
     phase_txt = "🎯 Combine en cours" if state["phase"] == "COMBINE" else "💵 Compte financé"
-    lines = [
-        f"📊 **Bilan de fin de journée** — {phase_txt}",
-        f"PnL du jour : `{day_pnl:+,.2f}$`",
-        f"Équity : `{state['equity']:,.2f}$`",
-    ]
+    title = "📊 **Bilan de fin de journée (envoyé en retard — panne temporaire)**" if late else "📊 **Bilan de fin de journée**"
+    lines = [f"{title} — {phase_txt}", f"PnL du jour : `{day_pnl:+,.2f}$`", f"Équity : `{state['equity']:,.2f}$`"]
     if state["phase"] == "COMBINE":
         profit = state["equity"] - 50000.0
         eff_target = max(3000.0, state["best_day_profit"] / 0.50) if state["best_day_profit"] > 0 else 3000.0
