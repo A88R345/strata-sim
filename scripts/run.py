@@ -62,7 +62,26 @@ def parkinson_var_running(bars):
 def finalize_session(state, sess):
     """Cloture la session en cours : calcule ses stats finales, les ajoute a
     recent_sessions, met a jour ratio_hist (walk-forward, no-lookahead : utilise le
-    mu_hod/mu_lod DEJA fige au moment ou la zone de CETTE session avait ete calculee)."""
+    mu_hod/mu_lod DEJA fige au moment ou la zone de CETTE session avait ete calculee).
+
+    Filet de securite : si le bilan EOD de CETTE session n'a jamais ete envoye (aucune
+    barre dans la fenetre 15:55-23:00 n'a ete traitee, ex. panne prolongee), on le
+    declenche ICI avant de basculer sur la nouvelle session -- garantit qu'il part
+    TOUJOURS, au pire avec retard, plutot que d'etre perdu definitivement. Fait aussi
+    avancer reellement l'etat Combine (end_of_day/check_payout), pas juste la notif --
+    sinon best_day_profit/highest_eod resteraient faux pour ce jour manque.
+    """
+    if state["eod_sent_for"] != sess["session_date"]:
+        day_pnl = state["combine"]["equity"] - state["combine"]["day_start_equity"]
+        cs_event = cs.end_of_day(state["combine"])
+        if cs_event:
+            notify.notify_special_event(cs_event, state["combine"])
+        payout = cs.check_payout(state["combine"])
+        if payout:
+            notify.notify_payout(payout, state["combine"])
+        notify.notify_eod_summary(day_pnl, state["combine"], state["combine"]["n_days"], late=True)
+        state["eod_sent_for"] = sess["session_date"]
+
     hod = max(b["High"] for b in sess["bars"])
     lod = min(b["Low"] for b in sess["bars"])
     park_var = parkinson_var_running(sess["bars"])
@@ -73,7 +92,7 @@ def finalize_session(state, sess):
         "open_ret": None,
     }
     state["recent_sessions"].append(record)
-    state["recent_sessions"] = state["recent_sessions"][-90:]  # fenetre glissante raisonnable
+    state["recent_sessions"] = state["recent_sessions"][-90:]
 
     if sess.get("zone"):
         reg = sess["zone"]["regime3"]
