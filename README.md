@@ -1,6 +1,6 @@
-# canopus-sim
+# strat-pf-sim
 
-Logging de signaux Canopus en temps quasi-reel (aucune execution reelle d'ordres),
+Logging de signaux strat-pf en temps quasi-reel (aucune execution reelle d'ordres),
 simulant un Combine TopStep 50K jusqu'a un compte finance et ses payouts.
 
 ## Fonctionnement
