@@ -1,20 +1,25 @@
 """
-Machine a etats du Combine TopStep 50K -> compte finance -> payouts, pour usage LIVE
+Machine a etats du Combine LucidFlex 50K -> compte finance -> payouts, pour usage LIVE
 (appelee a chaque evenement de trade avec l'etat persistant charge depuis state.json).
-Regles identiques a celles validees dans les simulations (09_lifecycle.py/10_multi_firm.py).
+Regles verifiees pour LucidFlex specifiquement (pas TopStep) :
+  - Eval : pas de Daily Loss Limit, MLL EOD 2000$, consistency 50% (eval uniquement)
+  - Finance : pas de consistency, pas de DLL, MLL EOD 2000$ qui NE SE VERROUILLE JAMAIS
+    (contrairement a TopStep/Tradeify -- risque de trailing permanent chez LucidFlex)
+  - Payout : seuil jour gagnant 150$ (compte 50K), 5 jours requis, minimum 500$,
+    plafond 50% du profit du cycle jusqu'a 2000$ max, split 90/10
 """
 START_BALANCE = 50000.0
 TARGET = 3000.0
 TRAIL_COMBINE = 2000.0
-DLL = 1000.0
 CONSISTENCY = 0.50
+# Pas de DLL chez LucidFlex (contrairement a TopStep) -- concept retire entierement
 
 FUNDED_TRAIL = 2000.0
-PAYOUT_MIN = 125.0
-PAYOUT_CAP_FIXED = 5000.0
+PAYOUT_MIN = 500.0
+PAYOUT_CAP_FIXED = 2000.0
 PAYOUT_CAP_PCT = 0.50
 SPLIT = 0.90
-WIN_DAY_THRESH = 200.0
+WIN_DAY_THRESH = 150.0
 WIN_DAYS_REQUIRED = 5
 
 
@@ -22,8 +27,8 @@ def new_combine_state():
     return {
         "phase": "COMBINE", "equity": START_BALANCE, "highest_eod": START_BALANCE,
         "day_start_equity": START_BALANCE, "best_day_profit": 0.0, "n_days": 0,
-        "dll_hit_today": False, "win_days_funded": 0, "cycle_base_funded": START_BALANCE,
-        "floor_locked_funded": False, "total_payouts": 0.0, "n_payouts": 0,
+        "win_days_funded": 0, "cycle_base_funded": START_BALANCE,
+        "total_payouts": 0.0, "n_payouts": 0,
         "n_combine_attempts": 1, "n_funded_accounts": 0,
     }
 
@@ -31,20 +36,15 @@ def new_combine_state():
 def on_new_day(state):
     """A appeler au tout debut de chaque nouvelle session de trading."""
     state["day_start_equity"] = state["equity"]
-    state["dll_hit_today"] = False
     state["n_days"] += 1
 
 
 def apply_pnl(state, pnl_usd):
     """Applique un PnL realise (evenement de trade). Retourne un evenement special
-    ('FAIL_MLL','PASS','BLOW','FUNDED') ou None si rien de notable ne se declenche."""
+    ('FAIL_MLL','PASS','BLOW_NO_PAYOUT','BLOW_POST_PAYOUT') ou None."""
     if state["phase"] == "COMBINE":
-        if state["dll_hit_today"]:
-            return None  # DLL soft : plus de nouveaux trades comptabilises aujourd'hui
         state["equity"] += pnl_usd
         floor = min(state["highest_eod"] - TRAIL_COMBINE, START_BALANCE)
-        if (state["equity"] - state["day_start_equity"]) <= -DLL:
-            state["dll_hit_today"] = True
         if state["equity"] <= floor:
             _reset_after_combine_fail(state)
             return "FAIL_MLL"
@@ -52,8 +52,8 @@ def apply_pnl(state, pnl_usd):
 
     elif state["phase"] == "FUNDED":
         state["equity"] += pnl_usd
-        floor = (START_BALANCE if state["floor_locked_funded"]
-                 else min(state["highest_eod"] - FUNDED_TRAIL, START_BALANCE))
+        # LucidFlex : le trailing suit le plus haut atteint EN PERMANENCE, jamais fige.
+        floor = state["highest_eod"] - FUNDED_TRAIL
         if state["equity"] <= floor:
             had_payout = state["n_payouts"] > 0
             _reset_after_funded_blow(state)
@@ -62,8 +62,7 @@ def apply_pnl(state, pnl_usd):
 
 
 def end_of_day(state):
-    """A appeler en fin de session (15:55 NY). Verifie PASS (Combine) et met a jour le
-    plancher trailing. Retourne un evenement ('PASS', 'FUNDED') ou None."""
+    """A appeler en fin de session (15:55 NY). Retourne un evenement ('PASS') ou None."""
     day_pnl = state["equity"] - state["day_start_equity"]
 
     if state["phase"] == "COMBINE":
@@ -76,7 +75,6 @@ def end_of_day(state):
             state["highest_eod"] = state["equity"]
             state["win_days_funded"] = 0
             state["cycle_base_funded"] = state["equity"]
-            state["floor_locked_funded"] = False
             return "PASS"
         state["highest_eod"] = max(state["highest_eod"], state["equity"])
         return None
@@ -84,10 +82,7 @@ def end_of_day(state):
     elif state["phase"] == "FUNDED":
         if day_pnl > WIN_DAY_THRESH:
             state["win_days_funded"] += 1
-        if not state["floor_locked_funded"]:
-            state["highest_eod"] = max(state["highest_eod"], state["equity"])
-            if state["highest_eod"] - FUNDED_TRAIL >= START_BALANCE:
-                state["floor_locked_funded"] = True
+        state["highest_eod"] = max(state["highest_eod"], state["equity"])
         return None
 
 
@@ -98,7 +93,7 @@ def check_payout(state):
         return None
     cycle_avail = state["equity"] - state["cycle_base_funded"]
     if state["win_days_funded"] >= WIN_DAYS_REQUIRED and cycle_avail >= PAYOUT_MIN:
-        payout_gross = min(cycle_avail, PAYOUT_CAP_FIXED, PAYOUT_CAP_PCT * state["equity"])
+        payout_gross = min(cycle_avail * PAYOUT_CAP_PCT, PAYOUT_CAP_FIXED)
         if payout_gross >= PAYOUT_MIN:
             trader_share = payout_gross * SPLIT
             state["equity"] -= payout_gross
